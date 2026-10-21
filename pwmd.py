@@ -355,10 +355,10 @@ class BmcBackend(FanBackend):
 
 
 class SerialBackend(FanBackend):
-    """ESP32 (pwmfan.ino) に USB シリアルで duty を送る。
+    """M5Stamp-C3 (pwmfan.ino) に USB シリアルで duty を送る。
 
     BMC を一切経由しないので、BMCファームの不具合・セッション切れ・
-    Web API の仕様変更から完全に独立する。ESP32 側は 30 秒コマンドが
+    Web API の仕様変更から完全に独立する。マイコン側は 30 秒コマンドが
     途切れると自力で 100% へ倒れるため、ホストがフリーズしても冷却が続く。
     """
 
@@ -380,9 +380,18 @@ class SerialBackend(FanBackend):
                 self.ser.close()
             except Exception:
                 pass
-        self.ser = self._serial_mod.Serial(self.port, self.baud,
-                                           timeout=self.timeout,
-                                           write_timeout=self.timeout)
+        # M5Stamp-C3 の USB-UART (CH9102) は DTR/RTS が ESP32-C3 の EN / GPIO9
+        # に繋がっており、既定のまま open すると自動リセットが掛かって duty が
+        # boot(100%) に戻る。open 前に両方 Low へ倒して不要なリセットを防ぐ。
+        ser = self._serial_mod.Serial()
+        ser.port = self.port
+        ser.baudrate = self.baud
+        ser.timeout = self.timeout
+        ser.write_timeout = self.timeout
+        ser.dtr = False
+        ser.rts = False
+        ser.open()
+        self.ser = ser
         time.sleep(0.2)
         self.ser.reset_input_buffer()
         try:
@@ -401,7 +410,7 @@ class SerialBackend(FanBackend):
                     if not resp:
                         raise IOError("no response from %s" % self.port)
                     if resp.startswith("EV "):
-                        log.warning("esp32 event: %s", resp[3:])
+                        log.warning("pwmfan event: %s", resp[3:])
                         continue
                     return resp
                 raise IOError("only events, no reply")
@@ -415,18 +424,18 @@ class SerialBackend(FanBackend):
     def set_duty(self, duty):
         resp = self.command("D %d" % round(duty))
         if not resp.startswith("OK"):
-            raise IOError("esp32 rejected duty: %s" % resp)
+            raise IOError("pwmfan rejected duty: %s" % resp)
 
     def heartbeat(self, duty):
-        # ESP32 側のフェイルセーフ (30秒) を毎サイクル餌付けする
+        # マイコン側のフェイルセーフ (30秒) を毎サイクル餌付けする
         if duty is not None:
             self.set_duty(duty)
 
     def status(self):
-        return {"esp32": self.command("S"), "port": self.port}
+        return {"pwmfan": self.command("S"), "port": self.port}
 
     def stop(self, restore):
-        # duty は ESP32 がそのまま保持する。ホストが黙れば 30 秒で 100% へ。
+        # duty はマイコンがそのまま保持する。ホストが黙れば 30 秒で 100% へ。
         try:
             self.ser.close()
         except Exception:

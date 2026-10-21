@@ -17,20 +17,32 @@ BOOT_DUTY = 100
 class MockFirmware:
     """pwmfan.ino と同じ状態機械。"""
 
-    VERSION = "1.0.0-mock"
+    VERSION = "1.1.0-mock"
 
     def __init__(self, failsafe_s=30.0):
         self.failsafe_s = failsafe_s
         self.duty = BOOT_DUTY
-        self.src = "boot"
+        self.failsafe = True        # 起動直後は未受信 = フェイルセーフ状態
+        self.got_first = False
         self.last_cmd = time.time()
         self.events = []
 
+    @property
+    def src(self):
+        """ファーム側 srcName() と同じ判定。"""
+        if self.failsafe:
+            return "failsafe" if self.got_first else "boot"
+        return "host"
+
     def tick(self):
-        """フェイルセーフ判定。発火したら通知行を返す。"""
-        if self.src != "failsafe" and \
+        """フェイルセーフ判定。発火したら通知行を返す。
+
+        ファームと同じく、ホストと一度も喋っていない間 (boot) は
+        既にフェイルセーフ状態なので EV は出さない。
+        """
+        if not self.failsafe and \
                 (time.time() - self.last_cmd) > self.failsafe_s:
-            self.src = "failsafe"
+            self.failsafe = True
             self.duty = 100
             return "EV failsafe timeout -> 100%"
         return None
@@ -50,7 +62,8 @@ class MockFirmware:
             if not 0 <= v <= 100:
                 return "ERR range 0-100"
             self.duty = v
-            self.src = "host"
+            self.failsafe = False
+            self.got_first = True
             self.last_cmd = time.time()
             return "OK D=%d" % self.duty
         if cmd == "S":
