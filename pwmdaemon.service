@@ -1,0 +1,24 @@
+[Unit]
+Description=pwmd - MZ32 SYSFAN blower control by 170HX temperature
+After=network-online.target
+Wants=network-online.target
+# 冷却デーモンなので「再起動を諦める」動作を禁止する
+StartLimitIntervalSec=0
+
+[Service]
+# Type=notify + WatchdogSec で、プロセスが丸ごと凍結(SIGSTOP/GIL固着/
+# カーネル側ブロック)してもsystemdが強制再起動する。Python内部の
+# ウォッチドッグスレッドが動けないケースはこちらが拾う二重防御。
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
+User=build
+ExecStart=/usr/bin/python3 /home/build/170hx/pwmdaemon/pwmd.py run --config /home/build/170hx/pwmdaemon/config.ini
+Restart=always
+RestartSec=5
+# 停止時はBMCのプロファイルを触らず最後のdutyを維持して離脱する
+# (純正へ戻すと SYS_FAN4 がCPU温度基準に落ちてGPUが冷えなくなるため)
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

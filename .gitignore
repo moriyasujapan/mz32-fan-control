@@ -1,0 +1,6 @@
+# BMC の認証情報を含むため公開しない
+config.ini
+
+__pycache__/
+*.pyc
+*.log
