@@ -159,3 +159,40 @@ BMC・Web API・ファームウェアの挙動から完全に独立する。
 切り替えられるようにする予定で、温度取得・カーブ・ログ・ウォッチドッグの
 資産はそのまま流用できる。ESP32 が故障したら PWM 線を SYS_FAN4 に
 差し替えるだけで BMC 版へ戻せる。
+
+## 8. ファームウェア
+
+| ファイル | 内容 |
+|---|---|
+| [`pwmfan/pwmfan.ino`](pwmfan/pwmfan.ino) | ESP32-C3 用ファーム (Arduino)。25kHz LEDC + 論理反転 + 30秒フェイルセーフ |
+| [`mock_pwmfan.py`](mock_pwmfan.py) | 同じプロトコルを pty 上で再現するモック。実機なしで検証するため |
+| [`test_serial_backend.py`](test_serial_backend.py) | `pwmd.py` の serial バックエンド結合テスト (13項目) |
+
+### 書き込み手順 (Arduino IDE)
+
+1. ボードマネージャで **esp32 by Espressif Systems** を入れる
+2. ボード: **ESP32C3 Dev Module**
+3. **USB CDC On Boot: Enabled** (これを忘れるとシリアルが出てこない)
+4. 書き込み後、`screen /dev/ttyACM0 115200` などで `P` を送り `PONG pwmfan 1.0.0`
+   が返れば成功
+
+### シリアルプロトコル
+
+| 送信 | 応答 | 意味 |
+|---|---|---|
+| `D <0-100>` | `OK D=<n>` | duty 設定 (このコマンドがフェイルセーフのタイマもリセットする) |
+| `S` | `ST duty=<n> src=<host\|failsafe\|boot> age=<ms>` | 状態取得 |
+| `P` | `PONG pwmfan <ver>` | 疎通確認 |
+| `V` | `VER pwmfan <ver> pin=<n> freq=<hz>` | ビルド情報 |
+| - | `EV failsafe timeout -> 100%` | 非同期通知 (ホスト沈黙時) |
+
+### 検証結果 (モックファーム / 2026-10-21)
+
+```
+[1] 初期化      V/P 応答、起動直後は boot=100% (安全側)
+[2] duty 指示   D 63 反映、S で確認、小数は四捨五入
+[3] Controller  ヒステリシス内は据え置き + heartbeat は送出
+[4] フェイルセーフ 無通信で 100%、再開で host 制御へ復帰
+[5] 障害復旧    ポート切断後に自動再オープンして送信成功
+→ 13 項目すべて PASS
+```

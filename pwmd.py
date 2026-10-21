@@ -298,14 +298,156 @@ def curve_duty(pts, temp):
     return pts[-1][1]
 
 
-# --- デーモン -----------------------------------------------------------------
+# --- 出力バックエンド ---------------------------------------------------------
 
-class Controller:
+class FanBackend:
+    """duty% をファンへ届ける経路の共通インターフェース。"""
+
+    name = "base"
+
+    def set_duty(self, duty):
+        raise NotImplementedError
+
+    def heartbeat(self, duty):
+        """毎サイクル呼ばれる。ハード側のフェイルセーフを生かすため。"""
+
+    def status(self):
+        return {}
+
+    def stop(self, restore):
+        pass
+
+
+class BmcBackend(FanBackend):
+    """BMC Web API の Fan Profile を書き換える (MZ32-AR0 の唯一の経路)。"""
+
+    name = "bmc"
+
     def __init__(self, cfg):
         self.bmc = BmcClient(cfg.get("bmc", "host"), cfg.get("bmc", "user"),
                              cfg.get("bmc", "password"),
                              cfg.getboolean("bmc", "verify_tls", fallback=False))
         self.sensor = cfg.getint("fan", "sensor")
+        self.profile = cfg.get("daemon", "profile_name", fallback="pwmd")
+
+    def target(self):
+        return FAN_SENSOR_NAMES.get(self.sensor, self.sensor)
+
+    def set_duty(self, duty):
+        self.bmc.put_profile(build_profile(duty, self.sensor, self.profile))
+        if self.bmc.get_mode() != self.profile:
+            self.bmc.set_mode(self.profile)
+
+    def status(self):
+        return {"mode": self.bmc.get_mode(),
+                "profiles": self.bmc.list_profiles(),
+                "rpm": self.bmc.fan_rpm()}
+
+    def stop(self, restore):
+        if restore:
+            try:
+                if self.bmc.get_mode() == self.profile:
+                    self.bmc.set_mode("default")
+                    log.info("restored strMode=default")
+            except Exception as e:
+                log.warning("restore on exit failed: %s", e)
+        self.bmc.logout()
+
+
+class SerialBackend(FanBackend):
+    """ESP32 (pwmfan.ino) に USB シリアルで duty を送る。
+
+    BMC を一切経由しないので、BMCファームの不具合・セッション切れ・
+    Web API の仕様変更から完全に独立する。ESP32 側は 30 秒コマンドが
+    途切れると自力で 100% へ倒れるため、ホストがフリーズしても冷却が続く。
+    """
+
+    name = "serial"
+
+    def __init__(self, cfg):
+        import serial  # pyserial (apt: python3-serial)
+        self.port = cfg.get("serial", "port", fallback="/dev/ttyACM0")
+        self.baud = cfg.getint("serial", "baud", fallback=115200)
+        self.timeout = cfg.getfloat("serial", "timeout", fallback=2.0)
+        self._serial_mod = serial
+        self.ser = None
+        self._lock = threading.Lock()
+        self.open()
+
+    def open(self):
+        if self.ser is not None:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+        self.ser = self._serial_mod.Serial(self.port, self.baud,
+                                           timeout=self.timeout,
+                                           write_timeout=self.timeout)
+        time.sleep(0.2)
+        self.ser.reset_input_buffer()
+        try:
+            log.info("serial backend: %s -> %s", self.port, self.command("V"))
+        except Exception as e:
+            log.warning("serial probe failed: %s", e)
+
+    def command(self, line, _retry=True):
+        """1 行送って 1 行受け取る。EV 行 (非同期通知) は読み飛ばす。"""
+        with self._lock:
+            try:
+                self.ser.write((line + "\n").encode())
+                self.ser.flush()
+                for _ in range(5):
+                    resp = self.ser.readline().decode(errors="replace").strip()
+                    if not resp:
+                        raise IOError("no response from %s" % self.port)
+                    if resp.startswith("EV "):
+                        log.warning("esp32 event: %s", resp[3:])
+                        continue
+                    return resp
+                raise IOError("only events, no reply")
+            except Exception:
+                if not _retry:
+                    raise
+        log.info("serial reopen (%s)", self.port)
+        self.open()
+        return self.command(line, _retry=False)
+
+    def set_duty(self, duty):
+        resp = self.command("D %d" % round(duty))
+        if not resp.startswith("OK"):
+            raise IOError("esp32 rejected duty: %s" % resp)
+
+    def heartbeat(self, duty):
+        # ESP32 側のフェイルセーフ (30秒) を毎サイクル餌付けする
+        if duty is not None:
+            self.set_duty(duty)
+
+    def status(self):
+        return {"esp32": self.command("S"), "port": self.port}
+
+    def stop(self, restore):
+        # duty は ESP32 がそのまま保持する。ホストが黙れば 30 秒で 100% へ。
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+
+
+def make_backend(cfg):
+    kind = cfg.get("fan", "backend", fallback="bmc").strip().lower()
+    if kind == "bmc":
+        return BmcBackend(cfg)
+    if kind == "serial":
+        return SerialBackend(cfg)
+    raise ValueError("unknown [fan] backend=%r (bmc | serial)" % kind)
+
+
+# --- デーモン -----------------------------------------------------------------
+
+class Controller:
+    def __init__(self, cfg):
+        self.backend = make_backend(cfg)
+        self.sensor = cfg.getint("fan", "sensor", fallback=189)
         self.pci_ids = [p.strip() for p in
                         cfg.get("gpu", "pci_ids").split(",") if p.strip()]
         self.include_hbm = cfg.getboolean("gpu", "include_hbm", fallback=True)
@@ -348,15 +490,18 @@ class Controller:
         duty = max(self.min_duty, min(self.max_duty, duty))
         if not force and self.applied is not None and \
                 abs(duty - self.applied) < self.min_step:
+            # 変化なしでもハード側フェイルセーフを維持するため心拍は送る
+            self.backend.heartbeat(self.applied)
             return False
-        self.bmc.put_profile(build_profile(duty, self.sensor, self.name))
-        mode = self.bmc.get_mode()
-        if mode != self.name:
-            self.bmc.set_mode(self.name)
+        self.backend.set_duty(duty)
         self.applied = duty
-        log.info("duty -> %d%% (sensor %s)", round(duty),
-                 FAN_SENSOR_NAMES.get(self.sensor, self.sensor))
+        log.info("duty -> %d%% (%s)", round(duty), self.target_label())
         return True
+
+    def target_label(self):
+        if isinstance(self.backend, BmcBackend):
+            return "sensor %s" % self.backend.target()
+        return "via %s" % self.backend.name
 
     def stop_gracefully(self):
         """終了時の既定は「最後のdutyを維持したまま離脱」。
@@ -366,18 +511,11 @@ class Controller:
         (アイドルCPU=30%前後)。BMCはプロファイルを保持し続けるので、
         触らずに抜けるのが最も安全。純正に戻すのは `pwmd.py restore` 明示時のみ。
         """
-        if self.restore_on_exit:
-            try:
-                if self.bmc.get_mode() == self.name:
-                    self.bmc.set_mode("default")
-                    log.info("restored strMode=default")
-            except Exception as e:  # BMC応答不能時はあきらめる
-                log.warning("restore on exit failed: %s", e)
-        else:
-            log.info("exiting, leaving fan at duty=%s%% (strMode=%s)",
+        if not self.restore_on_exit:
+            log.info("exiting, leaving fan at duty=%s%% (backend=%s)",
                      None if self.applied is None else round(self.applied),
-                     self.name)
-        self.bmc.logout()
+                     self.backend.name)
+        self.backend.stop(restore=self.restore_on_exit)
 
     def request_stop(self):
         self._stop.set()
@@ -385,15 +523,17 @@ class Controller:
     def run(self):
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: self.request_stop())
-        log.info("pwmd start: target=%s curve=%s interval=%.1fs",
-                 FAN_SENSOR_NAMES.get(self.sensor, self.sensor),
-                 self.curve, self.interval)
-        try:
-            mode = self.bmc.get_mode()
-            if mode not in ("default", self.name):
-                log.warning("BMC mode is %r (外部プロファイル実行中). 奪取します", mode)
-        except Exception as e:
-            log.warning("initial BMC read failed: %s", e)
+        log.info("pwmd start: backend=%s target=%s curve=%s interval=%.1fs",
+                 self.backend.name, self.target_label(), self.curve,
+                 self.interval)
+        if isinstance(self.backend, BmcBackend):
+            try:
+                mode = self.backend.bmc.get_mode()
+                if mode not in ("default", self.name):
+                    log.warning("BMC mode is %r (外部プロファイル実行中). 奪取します",
+                                mode)
+            except Exception as e:
+                log.warning("initial BMC read failed: %s", e)
         threading.Thread(target=self._watchdog, daemon=True,
                          name="watchdog").start()
         sd_notify("READY=1")
@@ -441,14 +581,14 @@ def make_controller(path):
 
 def cmd_status(cfg, ctl):
     temp, raw = max_temp(ctl.pci_ids, ctl.include_hbm)
-    print("170HX temps:", json.dumps(raw, ensure_ascii=False))
+    print("GPU temps:", json.dumps(raw, ensure_ascii=False))
     print("max temp:", temp)
     print("curve duty:", curve_duty(ctl.curve, temp) if temp else "n/a")
-    print("BMC mode:", ctl.bmc.get_mode())
-    print("profiles:", ctl.bmc.list_profiles())
-    print("RPM (redfish):", ctl.bmc.fan_rpm())
+    print("backend:", ctl.backend.name, "->", ctl.target_label())
+    for k, v in ctl.backend.status().items():
+        print("  %s: %s" % (k, v))
     # ipmitool は読取専用で有効 (PWM書込コマンドはこのfwに存在しない:
-    # netfn 0x30/0x3c 全256cmdスキャン済み、0x3c 0x0b OEM ID読出のみ)
+    # netfn 0x2e〜0x3e 全走査済み、0x3c 0x0b OEM ID読出のみ)
     try:
         out = subprocess.run(["sudo", "-n", "ipmitool", "sdr", "type", "Fan"],
                              capture_output=True, text=True, timeout=10).stdout
@@ -460,19 +600,22 @@ def cmd_status(cfg, ctl):
 
 
 def cmd_sweep(ctl, dwell):
-    print("SYS_FAN1..4 を順に 100% -> 45% にします。风声が変化するファンを探してください。")
-    print("Ctrl-C で中断 (自動で pure default に戻します)")
+    if not isinstance(ctl.backend, BmcBackend):
+        sys.exit("sweep は backend=bmc 専用です (ヘッダー特定用)")
+    bmc = ctl.backend.bmc
+    print("SYS_FAN1..4 を順に 100% -> 45% にします。風切り音が変化するファンを探してください。")
+    print("Ctrl-C で中断 (自動で default に戻します)")
     try:
         for s in (186, 187, 188, 189):
             for d in (100, 45):
-                ctl.bmc.put_profile(build_profile(d, s, ctl.name))
-                if ctl.bmc.get_mode() != ctl.name:
-                    ctl.bmc.set_mode(ctl.name)
+                bmc.put_profile(build_profile(d, s, ctl.name))
+                if bmc.get_mode() != ctl.name:
+                    bmc.set_mode(ctl.name)
                 print("  %-9s duty %3d%%" % (FAN_SENSOR_NAMES[s], d), flush=True)
                 time.sleep(dwell)
     finally:
-        ctl.bmc.set_mode("default")
-        ctl.bmc.delete_profile(ctl.name)
+        bmc.set_mode("default")
+        bmc.delete_profile(ctl.name)
         print("default に復帰しました")
 
 
@@ -495,16 +638,20 @@ def main():
             cmd_status(cfg, ctl)
         elif a.cmd == "set":
             ctl.apply(float(a.arg), force=True)
-            print("duty %s%% を適用しました (strMode=%s)" % (a.arg, ctl.name))
+            print("duty %s%% を適用しました (%s)" % (a.arg, ctl.target_label()))
         elif a.cmd == "sweep":
             cmd_sweep(ctl, float(a.arg) if a.arg else 8.0)
         elif a.cmd == "restore":
-            if ctl.bmc.get_mode() == ctl.name:
-                ctl.bmc.set_mode("default")
-            ctl.bmc.delete_profile(ctl.name)
+            if not isinstance(ctl.backend, BmcBackend):
+                sys.exit("restore は backend=bmc 専用です")
+            bmc = ctl.backend.bmc
+            if bmc.get_mode() == ctl.name:
+                bmc.set_mode("default")
+            bmc.delete_profile(ctl.name)
             print("BMC を純正制御 (default) に戻しました")
     finally:
-        ctl.bmc.logout()  # 使い捨てセッションを溜めない (BMC側上限対策)
+        # 使い捨てセッション/ポートを残さない
+        ctl.backend.stop(restore=False)
 
 
 if __name__ == "__main__":

@@ -142,6 +142,36 @@ Invalid command。DCMI/Redfish PATCHも不可)。ipmitool は監視専用
 純正へ戻すと SYS_FAN4 がCPU温度基準の曲線に落ち、GPU高温時に減速してしまうため。
 純正に戻したいときだけ `pwmd.py restore` を明示実行する。
 
+## 出力バックエンドの切り替え
+
+`config.ini` の `[fan] backend` で、duty をどの経路でファンへ届けるかを選ぶ。
+
+| backend | 経路 | 依存するもの |
+|---|---|---|
+| `bmc` (既定) | BMC Web API の Fan Profile → SYSFAN ヘッダー | BMCファーム・Web API・セッション |
+| `serial` | USB シリアル → ESP32-C3 → FET → ファンの PWM 線 | **BMC に一切依存しない** |
+
+温度取得 (nvidia-smi)・カーブ・ヒステリシス・ログ・3層ウォッチドッグは共通。
+`serial` では毎サイクル duty を送り続けることで、ESP32 側の 30 秒フェイル
+セーフ (無通信 → 100% 全開) を生かす。ホストが固まっても冷却が止まらない。
+
+```ini
+[fan]
+backend = serial
+
+[serial]
+port = /dev/ttyACM0
+baud = 115200
+timeout = 2.0
+```
+
+ファームと回路は [`esp32/`](esp32/)。**実機が無くてもモックファーム (pty) で
+検証できる**:
+
+```
+python3 esp32/test_serial_backend.py     # 13項目すべて PASS を確認済み
+```
+
 ## 使い方
 
 ```
