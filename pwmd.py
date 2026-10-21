@@ -515,6 +515,15 @@ class Controller:
         self.emerg_temp = cfg.getfloat("gpu", "emergency_temp", fallback=90.0)
         self.err_full_after = cfg.getint("daemon", "sensor_error_cycles_for_full",
                                          fallback=12)
+        # 非対称追従 (上昇は即応、下降は粘る)。
+        #   fall_rate  : 制御用の基準温度を 1 分あたり何℃まで下げてよいか
+        #   fall_offset: 下降局面ではカーブをこの℃だけ高温側にずらす (デッドバンド)
+        # 熱源が止まっても放熱は続いているので、GPU温度が下がった瞬間に
+        # 回転を落とすと再上昇してハンチングする。下げ方向だけ鈍らせる。
+        self.fall_rate = cfg.getfloat("curve", "fall_rate", fallback=12.0)
+        self.fall_offset = cfg.getfloat("curve", "fall_offset", fallback=0.0)
+        self.ref_temp = None     # カーブに食わせる基準温度 (実温度とは別)
+        self.peak_duty = None    # 上昇局面で到達した duty (下降時の上限)
         self.applied = None
         # 既定: 終了時に純正へ戻さない (GPU高温時の減速事故を防ぐ)
         self.restore_on_exit = cfg.getboolean("daemon", "restore_on_exit",
@@ -524,6 +533,31 @@ class Controller:
         self.heartbeat = time.time()
         self.watchdog_timeout = cfg.getfloat(
             "daemon", "watchdog_timeout", fallback=max(60.0, self.interval * 12))
+
+    def track_temp(self, temp, dt):
+        """実温度から「制御用の基準温度」を作る (上昇は即時、下降は律速)。
+
+        戻り値 (基準温度, 下降局面か) 。下降局面では fall_offset を上乗せして
+        カーブを引くため、ある程度下がりきるまで強めの回転を維持する。
+        """
+        if self.ref_temp is None or temp >= self.ref_temp:
+            self.ref_temp = temp            # 上昇は遅らせない (安全優先)
+            return temp, False
+        max_drop = self.fall_rate * (dt / 60.0)
+        self.ref_temp = max(temp, self.ref_temp - max_drop)
+        return self.ref_temp, True
+
+    def curve_target(self, temp, dt):
+        ref, falling = self.track_temp(temp, dt)
+        if not falling:
+            self.peak_duty = curve_duty(self.curve, ref)
+            return self.peak_duty
+        # 下降中: オフセットで粘らせるが、上昇局面の到達 duty は超えさせない
+        # (温度が下がったのに回転が上がる、という不合理を防ぐ)
+        target = curve_duty(self.curve, ref + self.fall_offset)
+        if self.peak_duty is not None:
+            target = min(target, self.peak_duty)
+        return target
 
     def _watchdog(self):
         """制御ループが固まったらプロセスを殺してsystemdに再起動させる。
@@ -593,6 +627,7 @@ class Controller:
                          name="watchdog").start()
         sd_notify("READY=1")
         err_cycles = 0
+        last_cycle = time.time() - self.interval
         while not self._stop.is_set():
             t0 = time.time()
             self.heartbeat = t0
@@ -602,13 +637,17 @@ class Controller:
                 if temp is None:
                     raise RuntimeError("no temperature from nvidia-smi (%s)" % raw)
                 err_cycles = 0
+                dt = max(0.1, t0 - last_cycle)
+                last_cycle = t0
                 if temp >= self.emerg_temp:
                     duty = 100.0
                     force = True
+                    self.ref_temp = temp
                 else:
-                    duty = curve_duty(self.curve, temp)
+                    duty = self.curve_target(temp, dt)
                     force = False
-                log.debug("max_temp=%s -> duty=%.1f", temp, duty)
+                log.debug("max_temp=%s ref=%.1f -> duty=%.1f", temp,
+                          self.ref_temp, duty)
                 self.apply(duty, force=force)
             except Exception as e:
                 err_cycles += 1

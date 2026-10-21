@@ -1,0 +1,51 @@
+[bmc]
+host = 192.168.1.107
+user = admin
+password = abc123..
+verify_tls = false
+
+[fan]
+; 出力先: bmc = BMC Web API の Fan Profile (MZ32-AR0 の唯一のIPMI外経路)
+;         serial = ESP32 (esp32/pwmfan/pwmfan.ino) へ USB シリアルで duty 送信
+backend = bmc
+
+# 配線を刺したSYSFANヘッダーのセンサー番号:
+#   186=SYS_FAN1  187=SYS_FAN2  188=SYS_FAN3  189=SYS_FAN4
+# ※SYS_FAN5(190)はプロファイル対象外でPWMフル固定・制御不可(実測)
+# 現構成: PWMハブ(CTRICALVER 10way/SATA給電) -> SYS_FAN4 = 189
+sensor = 189
+
+[gpu]
+# 温度ソース: CMP 170HX のPCI bus id (複数枚=MAX使用)
+pci_ids = 41:00.0, 42:00.0
+# HBM温度 (temperature.memory) を max に含める (170HXの実 hotspot)
+include_hbm = true
+# この温度を超えたら即100%
+emergency_temp = 90
+
+[curve]
+# 温度MAX(℃) -> PWM duty% 。;区切り、線形補間
+table = 35:20; 50:30; 60:45; 70:65; 75:80; 80:92; 85:100
+
+[daemon]
+profile_name = pwmd
+poll_interval = 5
+# duty変更の最小単位% (ノイズ低減・API書き込み削減)
+min_duty_step = 5
+# 常時最低duty (ファン停止防止)。
+# BFB1012EH実測: 15%でも失速せず回る → 余裕を見て20%を採用
+min_duty = 20
+max_duty = 100
+# nvidia-smi がこの回数連続失敗したら 100% 全開にする
+sensor_error_cycles_for_full = 12
+# 制御ループがこの秒数止まったらプロセス自殺→systemdが再起動 (ハング対策)
+watchdog_timeout = 60
+# 終了時にBMCを純正モードへ戻すか。false=最後のdutyを維持して離脱(推奨)
+# true にすると GPU高温のまま stop した際に SYS_FAN4 がCPU温度基準へ落ちる
+restore_on_exit = false
+
+[serial]
+; backend = serial のときだけ使用
+port = /dev/ttyACM0
+baud = 115200
+timeout = 2.0
