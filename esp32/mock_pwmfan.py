@@ -17,7 +17,7 @@ BOOT_DUTY = 100
 class MockFirmware:
     """pwmfan.ino と同じ状態機械。"""
 
-    VERSION = "1.1.0-mock"
+    VERSION = "1.2.0-mock"
 
     def __init__(self, failsafe_s=30.0):
         self.failsafe_s = failsafe_s
@@ -77,7 +77,7 @@ class MockFirmware:
         if cmd == "P":
             return "PONG pwmfan %s" % self.VERSION
         if cmd == "V":
-            return "VER pwmfan %s pin=5 freq=25000" % self.VERSION
+            return "VER pwmfan %s pin=5 freq=25000 invert=1" % self.VERSION
         return "ERR unknown"
 
 

@@ -9,6 +9,7 @@
  *        ゲートは 100kΩ で GND へプルダウン
  *   ※ FET でオープンドレイン化するため論理が反転する (ゲート High = PWM 線 Low)
  *   ※ ESP32 未起動時は FET OFF → PWM 線が 5V に張り付き 100% 全開 (安全側)
+ *   ※ BSS138 レベル変換モジュールを使う場合は PWM_INVERT = false にする
  *
  * 状態 LED (オンボード SK6812 / G2):
  *   青 = boot (ホスト未接続・全開)  緑 = host 制御中  赤 = failsafe (全開)
@@ -27,12 +28,20 @@
 
 #include <Arduino.h>
 
-static const char    *VERSION     = "1.1.0";
+static const char    *VERSION     = "1.2.0";
 static const uint8_t  PWM_PIN     = 5;       // G5 -> FET ゲート
 static const uint8_t  PWM_CHANNEL = 0;       // 2.x のみ使用
 static const uint32_t PWM_FREQ    = 25000;   // Intel 4-wire 仕様
 static const uint8_t  PWM_BITS    = 10;      // 0..1023
 static const uint16_t PWM_MAX     = (1 << PWM_BITS) - 1;
+
+// 出力段の論理。配線方式に合わせてここだけ変える。
+//   true  = 単石 Nch FET (2N7000 等) でオープンドレイン化した場合。
+//           ゲート HIGH -> FET ON -> PWM 線 LOW なので反転が要る。
+//   false = BSS138 レベル変換モジュール等、非反転バッファを挟んだ場合。
+// どちらでも duty=100 が「ファン全開」を意味するよう、ここで吸収する。
+// 誤るとカーブが冷却と逆に働くので、変更後は必ず D 100 で全開になることを確認する。
+static const bool     PWM_INVERT  = true;
 
 static const uint8_t  LED_PIN     = 2;       // オンボード SK6812
 static const uint8_t  LED_LEVEL   = 40;      // 明るさ (0-255)
@@ -80,7 +89,7 @@ static void applyDuty(uint8_t duty) {
   if (duty > 100) duty = 100;
   g_duty = duty;
   uint32_t raw = (uint32_t)duty * PWM_MAX / 100;
-  pwmWrite(PWM_MAX - raw);                   // 論理反転
+  pwmWrite(PWM_INVERT ? (PWM_MAX - raw) : raw);
   updateLed();
 }
 
@@ -116,8 +125,8 @@ static void handleLine(const String &raw) {
       Serial.printf("PONG pwmfan %s\n", VERSION);
       break;
     case 'V':
-      Serial.printf("VER pwmfan %s pin=%u freq=%lu\n", VERSION, PWM_PIN,
-                    (unsigned long)PWM_FREQ);
+      Serial.printf("VER pwmfan %s pin=%u freq=%lu invert=%d\n", VERSION,
+                    PWM_PIN, (unsigned long)PWM_FREQ, PWM_INVERT ? 1 : 0);
       break;
     default:
       Serial.println("ERR unknown");
