@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="1000" height="620" font-family="Noto Sans CJK JP, Hiragino Sans, sans-serif">
+  <rect width="1000" height="620" fill="#ffffff"/>
+  <text x="500" y="38" text-anchor="middle" font-size="22" font-weight="bold" fill="#222">M5Stamp-C3 ブロアファンコントローラ 配線図</text>
+  <text x="500" y="62" text-anchor="middle" font-size="13" fill="#666">BitWindow BFB1012EH (12V 4PIN PWM) / PWM は FET で反転 → duty_out = 1023 - duty</text>
+
+  <!-- Host PC -->
+  <rect x="30" y="110" width="150" height="90" rx="8" fill="#eef3fb" stroke="#4a6fa5" stroke-width="2"/>
+  <text x="105" y="145" text-anchor="middle" font-size="16" font-weight="bold" fill="#223">ホストPC</text>
+  <text x="105" y="168" text-anchor="middle" font-size="12" fill="#445">pwmd.py (serial)</text>
+  <text x="105" y="186" text-anchor="middle" font-size="12" fill="#445">/dev/ttyACM0</text>
+
+  <!-- Stamp-C3 -->
+  <rect x="270" y="95" width="200" height="300" rx="10" fill="#fff6e8" stroke="#e08a00" stroke-width="2.5"/>
+  <text x="370" y="125" text-anchor="middle" font-size="17" font-weight="bold" fill="#7a4a00">M5Stamp-C3</text>
+  <text x="370" y="144" text-anchor="middle" font-size="11" fill="#7a4a00">ESP32-C3 / CH9102</text>
+  <!-- USB-C -->
+  <rect x="270" y="140" width="34" height="40" fill="#ccc" stroke="#555"/>
+  <text x="287" y="196" text-anchor="middle" font-size="10" fill="#333">USB-C</text>
+  <!-- onboard -->
+  <circle cx="345" cy="230" r="10" fill="#7fd67f" stroke="#2a7a2a"/>
+  <text x="362" y="234" font-size="11" fill="#333">G2 SK6812 (状態LED)</text>
+  <rect x="337" y="258" width="16" height="16" rx="3" fill="#888"/>
+  <text x="362" y="271" font-size="11" fill="#333">G3 ボタン</text>
+  <text x="290" y="312" font-size="10" fill="#a33">使用禁止: G8 G9 (strap)</text>
+  <text x="290" y="326" font-size="10" fill="#a33">G20 G21 (UART0→CH9102)</text>
+  <!-- pins -->
+  <circle cx="470" cy="190" r="6" fill="#1f5fbf"/>
+  <text x="458" y="194" text-anchor="end" font-size="14" font-weight="bold" fill="#1f5fbf">G5</text>
+  <circle cx="470" cy="360" r="6" fill="#000"/>
+  <text x="458" y="364" text-anchor="end" font-size="14" font-weight="bold" fill="#000">GND</text>
+
+  <!-- USB cable -->
+  <path d="M180 160 L270 160" stroke="#555" stroke-width="5" fill="none"/>
+  <text x="225" y="150" text-anchor="middle" font-size="11" fill="#444">USB</text>
+  <text x="225" y="180" text-anchor="middle" font-size="10" fill="#444">5V給電+シリアル</text>
+
+  <!-- 1k gate resistor (optional) -->
+  <path d="M470 190 L584 190" stroke="#1f5fbf" stroke-width="2.5" fill="none"/>
+  <path d="M584 190 L640 190" stroke="#1f5fbf" stroke-width="2.5" fill="none"/>
+  <circle cx="640" cy="190" r="4" fill="#1f5fbf"/>
+
+  <!-- 100k pulldown -->
+  <path d="M640 190 L640 240" stroke="#1f5fbf" stroke-width="2.5" fill="none"/>
+  <rect x="632" y="240" width="16" height="50" fill="#fff" stroke="#333" stroke-width="2"/>
+  <text x="625" y="270" text-anchor="end" font-size="12" fill="#333">100kΩ</text>
+  <path d="M640 290 L640 360" stroke="#000" stroke-width="2.5" fill="none"/>
+
+  <!-- MOSFET -->
+  <path d="M640 190 L690 190" stroke="#1f5fbf" stroke-width="2.5" fill="none"/>
+  <line x1="690" y1="165" x2="690" y2="215" stroke="#333" stroke-width="3"/>
+  <line x1="700" y1="160" x2="700" y2="175" stroke="#333" stroke-width="3"/>
+  <line x1="700" y1="183" x2="700" y2="197" stroke="#333" stroke-width="3"/>
+  <line x1="700" y1="205" x2="700" y2="220" stroke="#333" stroke-width="3"/>
+  <path d="M700 167 L730 167 L730 120" stroke="#d2691e" stroke-width="2.5" fill="none"/>
+  <path d="M700 212 L730 212 L730 360" stroke="#000" stroke-width="2.5" fill="none"/>
+  <path d="M700 190 L730 190 L730 212" stroke="#333" stroke-width="2" fill="none"/>
+  <polygon points="704,190 714,185 714,195" fill="#333"/>
+  <text x="708" y="158" font-size="11" fill="#333">D</text>
+  <text x="676" y="182" font-size="11" fill="#333">G</text>
+  <text x="708" y="235" font-size="11" fill="#333">S</text>
+  <text x="750" y="196" font-size="13" font-weight="bold" fill="#333">2N7000 (TO-92)</text>
+  
+
+  <!-- GND bus -->
+  <path d="M470 360 L940 360" stroke="#000" stroke-width="3" fill="none"/>
+  <circle cx="640" cy="360" r="4" fill="#000"/>
+  <circle cx="730" cy="360" r="4" fill="#000"/><circle cx="845" cy="360" r="4" fill="#000"/>
+
+  <!-- PWM line -->
+  <path d="M730 120 L860 120" stroke="#d2691e" stroke-width="2.5" fill="none"/>
+  <text x="850" y="112" text-anchor="end" font-size="11" fill="#d2691e" x2="0">PWM (5V pull-upはファン内部)</text>
+
+  <!-- 4PIN plug -->
+  <rect x="860" y="90" width="110" height="300" rx="6" fill="#f2f2f2" stroke="#555" stroke-width="2"/>
+  <text x="915" y="82" text-anchor="middle" font-size="12" font-weight="bold" fill="#333">PWMハブ 4PIN</text>
+  <text x="915" y="408" text-anchor="middle" font-size="11" fill="#555">(マザー側オスプラグ)</text>
+  <circle cx="880" cy="120" r="7" fill="#1f5fbf"/><text x="895" y="124" font-size="12" fill="#222">4 PWM 青</text>
+  <circle cx="880" cy="180" r="7" fill="#e6c200"/><text x="895" y="184" font-size="12" fill="#999">3 Tach 黄</text>
+  <text x="895" y="199" font-size="10" fill="#999">未接続</text>
+  <circle cx="880" cy="250" r="7" fill="#d22"/><text x="895" y="254" font-size="12" fill="#999">2 +12V 赤</text>
+  <text x="895" y="269" font-size="10" fill="#999">未接続</text>
+  <circle cx="880" cy="360" r="7" fill="#000"/><text x="895" y="364" font-size="12" fill="#222">1 GND 黒</text>
+  <path d="M860 120 L873 120" stroke="#d2691e" stroke-width="2.5"/>
+
+  <!-- SATA power -->
+  <rect x="620" y="450" width="350" height="70" rx="8" fill="#fbeeee" stroke="#b33" stroke-width="2"/>
+  <text x="795" y="477" text-anchor="middle" font-size="14" font-weight="bold" fill="#822">SATA 電源 → PWMハブ → ブロア</text>
+  <text x="795" y="500" text-anchor="middle" font-size="12" fill="#633">+12V(黄) はハブ経由でファンへ常時給電 / GND 共通</text>
+  <path d="M795 450 L795 430 L845 430 L845 360" stroke="#000" stroke-width="2" stroke-dasharray="6,4" fill="none"/>
+  <text x="1000" y="0" font-size="1"></text><text x="855" y="440" font-size="10" fill="#444" textLength="110" lengthAdjust="spacingAndGlyphs">GND はホストPSU経由で共通</text>
+
+  <!-- notes -->
+  <text x="30" y="470" font-size="13" font-weight="bold" fill="#222">注意</text>
+  <text x="30" y="492" font-size="12" fill="#333">・G5 を FET 無しでファン PWM に直結しない (5V プルアップ &gt; 3.6V)</text>
+  <text x="30" y="512" font-size="12" fill="#333">・Stamp-C3 は必ずホストの USB から給電 (別アダプタ不可)</text>
+  <text x="30" y="532" font-size="12" fill="#333">・100kΩ で起動中ゲート Low → FET OFF → PWM High = 100% (安全側)</text>
+  <text x="30" y="552" font-size="12" fill="#333">・pyserial は open 前に dtr=False / rts=False (自動リセット回避)</text>
+  <text x="30" y="590" font-size="11" fill="#888">ピンの物理位置は公式ピンマップで現物照合のこと</text>
+</svg>

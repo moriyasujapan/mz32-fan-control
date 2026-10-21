@@ -8,12 +8,12 @@ GIGABYTE **MZ32-AR0** (AMI MegaRAC BMC) に載せた **NVIDIA CMP 170HX ×2** �
 存在せず、PCIe P2A ブリッジと LPC iLPC2AHB バックドアもファームで無効化済み。
 GIGABYTE 公式サポートの回答も「**BMC Web GUI の Fan Profile を使え**」でした。
 本リポジトリはその Fan Profile 機構を REST API 経由で叩く常駐デーモンと、
-BMC に依存しない ESP32 版への移行設計をまとめたものです。
+BMC に依存しない M5Stamp-C3 (ESP32-C3) 版への移行設計をまとめたものです。
 
 | ディレクトリ | 内容 |
 |---|---|
 | `pwmd.py` ほか | **現行版**: BMC Web API Fan Profile を叩くデーモン (稼働中・負荷試験済み) |
-| [`esp32/`](esp32/) | **移行先**: ESP32-C3 から直接 PWM を出す構成の配線図・基板実装図・部品表 |
+| [`esp32/`](esp32/) | **移行先**: M5Stamp-C3 から直接 PWM を出す構成のファーム・配線図・実装図・部品表・ケース STL |
 
 ### 動作環境 (検証済み)
 
@@ -149,11 +149,13 @@ Invalid command。DCMI/Redfish PATCHも不可)。ipmitool は監視専用
 | backend | 経路 | 依存するもの |
 |---|---|---|
 | `bmc` (既定) | BMC Web API の Fan Profile → SYSFAN ヘッダー | BMCファーム・Web API・セッション |
-| `serial` | USB シリアル → ESP32-C3 → FET → ファンの PWM 線 | **BMC に一切依存しない** |
+| `serial` | USB シリアル → M5Stamp-C3 → FET → ファンの PWM 線 | **BMC に一切依存しない** |
 
 温度取得 (nvidia-smi)・カーブ・ヒステリシス・ログ・3層ウォッチドッグは共通。
-`serial` では毎サイクル duty を送り続けることで、ESP32 側の 30 秒フェイル
+`serial` では毎サイクル duty を送り続けることで、マイコン側の 30 秒フェイル
 セーフ (無通信 → 100% 全開) を生かす。ホストが固まっても冷却が止まらない。
+マイコン未起動時は FET が OFF → PWM 線が 5V に張り付いて 100% 全開になるため、
+電源断・書き込み中も安全側に倒れる。
 
 ```ini
 [fan]
@@ -165,8 +167,13 @@ baud = 115200
 timeout = 2.0
 ```
 
-ファームと回路は [`esp32/`](esp32/)。**実機が無くてもモックファーム (pty) で
-検証できる**:
+ファームと回路は [`esp32/`](esp32/)。PWM は **G5 → 2N7000 (ゲート 100kΩ
+プルダウン) → ファン PWM 線 (青)** で、FET でオープンドレイン化するため
+論理が反転する (`duty_out = 1023 - duty`)。基板はケースを兼ねた PETG 印刷品
+(`stampc3_*.stl`) で、オンボード SK6812 が **青=boot / 緑=host / 赤=failsafe**
+を表示する。
+
+**実機が無くてもモックファーム (pty) で検証できる** (要 pyserial):
 
 ```
 python3 esp32/test_serial_backend.py     # 13項目すべて PASS を確認済み
