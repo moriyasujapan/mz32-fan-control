@@ -124,6 +124,19 @@ def main():
         ok, detail = False, "例外: %s" % e
     check("ブートログを挟んでも set_duty が失敗しない", ok, detail)
 
+    print("\n[7] invert=true (非反転配線のホスト側補正)")
+    cfg_inv = make_cfg(port)
+    cfg_inv.set("serial", "invert", "true")
+    be_inv = pwmd.SerialBackend(cfg_inv)
+    be_inv.set_duty(30)
+    check("duty 30 -> ファームへ 70 を送る", fw.duty == 70, "fw.duty=%d" % fw.duty)
+    be_inv.set_duty(100)
+    check("duty 100 -> ファームへ 0 を送る", fw.duty == 0, "fw.duty=%d" % fw.duty)
+    be_inv.set_duty(0)
+    check("duty 0 -> ファームへ 100 を送る", fw.duty == 100, "fw.duty=%d" % fw.duty)
+    check("status に invert が出る", be_inv.status().get("invert") is True)
+    be_inv.stop(restore=False)
+
     be.stop(restore=False)
     stop.set()
     print("\n結果: %d 件中 %d 件失敗" % (len(checks), len(fails)))

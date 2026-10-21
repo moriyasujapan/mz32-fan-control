@@ -375,6 +375,13 @@ class SerialBackend(FanBackend):
         self.port = cfg.get("serial", "port", fallback="/dev/ttyACM0")
         self.baud = cfg.getint("serial", "baud", fallback=115200)
         self.timeout = cfg.getfloat("serial", "timeout", fallback=2.0)
+        # 配線が非反転 (FET のオープンドレインを経由していない) 場合に true。
+        # ファーム側は duty をそのまま "明るさ" として扱うので、ホストで
+        # 100-duty を送って辻褄を合わせる。
+        # ※ これはファームの failsafe までは直せない。無通信 30 秒でファームは
+        #    duty=100 に倒すが、非反転配線ではそれがファン 0% を意味する。
+        #    恒久対策はファームの反転を外すか配線を直すこと。
+        self.invert = cfg.getboolean("serial", "invert", fallback=False)
         self._serial_mod = serial
         self.ser = None
         self._lock = threading.Lock()
@@ -405,6 +412,10 @@ class SerialBackend(FanBackend):
         self._drain(1.5)
         try:
             log.info("serial backend: %s -> %s", self.port, self.command("V"))
+            if self.invert:
+                log.warning("serial invert=true: 配線が非反転のため duty を "
+                            "ホスト側で反転して送る。ファームの failsafe "
+                            "(無通信30秒 -> duty 100) はファン 0% を意味する点に注意")
         except Exception as e:
             log.warning("serial probe failed: %s", e)
 
@@ -453,7 +464,10 @@ class SerialBackend(FanBackend):
         return self.command(line, _retry=False)
 
     def set_duty(self, duty):
-        resp = self.command("D %d" % round(duty))
+        out = round(duty)
+        if self.invert:
+            out = 100 - out
+        resp = self.command("D %d" % out)
         if not resp.startswith("OK"):
             raise IOError("pwmfan rejected duty: %s" % resp)
 
@@ -463,7 +477,8 @@ class SerialBackend(FanBackend):
             self.set_duty(duty)
 
     def status(self):
-        return {"pwmfan": self.command("S"), "port": self.port}
+        return {"pwmfan": self.command("S"), "port": self.port,
+                "invert": self.invert}
 
     def stop(self, restore):
         # duty はマイコンがそのまま保持する。ホストが黙れば 30 秒で 100% へ。
