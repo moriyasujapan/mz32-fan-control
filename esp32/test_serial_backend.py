@@ -102,6 +102,28 @@ def main():
         ok, _ = False, print("    reopen failed:", e)
     check("切断後に再オープンして送信できる", ok, "duty=%d" % fw.duty)
 
+    print("\n[6] リセット直後の ROM ブートログを誤読しないこと")
+    # 実測した Stamp-C3 の ROM ブートログ (CH9102 は open のたびにリセットする)
+    boot_log = (b"ESP-ROM:esp32c3-api1-20210207\r\n"
+                b"Build:Feb  7 2021\r\n"
+                b"rst:0x1 (POWERON),boot:0xc (SPI_FAST_FLASH_BOOT)\r\n"
+                b"SPIWP:0xee\r\nmode:DIO, clock div:1\r\n"
+                b"load:0x3fcd5820,len:0x110c\r\nload:0x403cbf10,len:0xb54\r\n"
+                b"load:0x403ce710,len:0x2f9c\r\nentry 0x403cbf10\r\n")
+    fw.emit_raw(boot_log)
+    time.sleep(0.2)
+    resp = be.command("P")
+    check("ブートログを挟んでも PONG を拾える", resp.startswith("PONG"), resp)
+    fw.emit_raw(boot_log)
+    time.sleep(0.2)
+    try:
+        be.set_duty(42)
+        ok = fw.duty == 42
+        detail = "duty=%d" % fw.duty
+    except Exception as e:
+        ok, detail = False, "例外: %s" % e
+    check("ブートログを挟んでも set_duty が失敗しない", ok, detail)
+
     be.stop(restore=False)
     stop.set()
     print("\n結果: %d 件中 %d 件失敗" % (len(checks), len(fails)))

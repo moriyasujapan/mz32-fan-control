@@ -149,9 +149,37 @@ SuperMini 版から変更するのは以下だけ。
 
 ### ホスト側 (pwmd.py) の注意
 
-CH9102 の DTR/RTS は ESP32-C3 の EN / G9 に繋がっているため、ポートのオープン/クローズで**リセットが掛かることがある**。
-起動直後は boot=100% なので安全側ではあるが、不要なリセットを避けるため pyserial では open 前に DTR/RTS を落とす。
-[`pwmd.py`](../pwmd.py) の `SerialBackend.open()` は対応済み。
+CH9102 の DTR/RTS は ESP32-C3 の EN / G9 に繋がっているため、ポートを開くと**リセットが掛かる**。
+
+**実測 (2026-10-22 / Ubuntu 26.04 + cdc_acm)**: `dtr=False` / `rts=False` を open 前に
+セットしても、`stty -hupcl` を併用しても**リセットは防げない**。cdc_acm が open 時に
+一度 DTR を上げるため。open のたびに `rst:0x1 (POWERON)` が起き、ROM ブートログが
+9 行 (236 bytes) 流れてくる:
+
+```
+ESP-ROM:esp32c3-api1-20210207
+rst:0x1 (POWERON),boot:0xc (SPI_FAST_FLASH_BOOT)
+... entry 0x403cbf10
+```
+
+リセット自体は**安全側**なので許容する (boot = 100% 全開 / LED 青)。ただし
+**ブートログを応答と取り違えると `set_duty` が失敗 → 再オープン → 再リセットの
+ループに陥る**ため、ホスト側で読み捨てが必須。[`pwmd.py`](../pwmd.py) の
+`SerialBackend` は `_drain()` でブートログを捨て、`OK / ST / PONG / VER / ERR`
+で始まる行だけを応答として受け付ける (回帰テスト `[6]`)。
+
+シェルから叩くときは、ディスクリプタを開きっぱなしにすれば追加のリセットは起きない:
+
+```bash
+sudo bash -c '
+exec 3<>/dev/ttyACM0
+stty -F /dev/ttyACM0 115200 raw -echo
+timeout 1.5 cat <&3 >/dev/null     # ブートログを捨てる
+echo "P" >&3; read -t 2 -r l <&3; echo "$l"
+'
+```
+
+pyserial で開く場合はこの形 (DTR/RTS を落とすこと自体は他のアダプタで効くので残す):
 
 ```python
 ser = serial.Serial()
@@ -172,7 +200,7 @@ SuperMini 版と同じ。マザーボードの SYSFAN ヘッダーは使わず B
 |---|---|
 | [`pwmfan/pwmfan.ino`](pwmfan/pwmfan.ino) | Stamp-C3 用ファーム (Arduino) `1.1.0`。25kHz LEDC + 論理反転 + 30秒フェイルセーフ + 状態 LED |
 | [`mock_pwmfan.py`](mock_pwmfan.py) | 同じプロトコルを pty 上で再現するモック。実機なしで検証するため |
-| [`test_serial_backend.py`](test_serial_backend.py) | `pwmd.py` の serial バックエンド結合テスト (13項目) |
+| [`test_serial_backend.py`](test_serial_backend.py) | `pwmd.py` の serial バックエンド結合テスト (15項目) |
 
 ### シリアルプロトコル
 
@@ -192,7 +220,7 @@ SuperMini 版と同じ。マザーボードの SYSFAN ヘッダーは使わず B
 | 緑 | host — ホストの指示どおり制御中 | 指示値 |
 | 赤 | failsafe — ホストが 30 秒沈黙した | 100% |
 
-### 検証結果 (モックファーム / 2026-10-21)
+### 検証結果 (モックファーム / 2026-10-22)
 
 ```
 [1] 初期化      V/P 応答、起動直後は boot=100% (安全側)
@@ -200,5 +228,6 @@ SuperMini 版と同じ。マザーボードの SYSFAN ヘッダーは使わず B
 [3] Controller  ヒステリシス内は据え置き + heartbeat は送出
 [4] フェイルセーフ 無通信で 100%、再開で host 制御へ復帰
 [5] 障害復旧    ポート切断後に自動再オープンして送信成功
-→ 13 項目すべて PASS
+[6] ブートログ  リセット直後の ROM ログを応答と誤読しない
+→ 15 項目すべて PASS
 ```

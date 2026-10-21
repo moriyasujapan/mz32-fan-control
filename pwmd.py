@@ -354,6 +354,12 @@ class BmcBackend(FanBackend):
         self.bmc.logout()
 
 
+# ファームの応答行の接頭辞。これ以外は読み飛ばす。
+REPLY_PREFIXES = ("OK ", "ST ", "PONG ", "VER ", "ERR ")
+# 1 コマンドあたり何行まで読んで応答を探すか (ブートログ 9 行 + 余裕)
+MAX_REPLY_LINES = 24
+
+
 class SerialBackend(FanBackend):
     """M5Stamp-C3 (pwmfan.ino) に USB シリアルで duty を送る。
 
@@ -392,28 +398,53 @@ class SerialBackend(FanBackend):
         ser.rts = False
         ser.open()
         self.ser = ser
-        time.sleep(0.2)
-        self.ser.reset_input_buffer()
+        # DTR/RTS を落としても cdc_acm が open 時に一度上げるため、実機では
+        # 結局リセットが掛かる (実測: rst:0x1 POWERON / ROM ブートログ 236 bytes)。
+        # リセット自体は安全側 (boot = 100% 全開) なので許容し、ブートログを
+        # 読み捨ててからファームと喋る。
+        self._drain(1.5)
         try:
             log.info("serial backend: %s -> %s", self.port, self.command("V"))
         except Exception as e:
             log.warning("serial probe failed: %s", e)
 
+    def _drain(self, deadline):
+        """静かになるまで読み捨てる。リセット直後の ROM ブートログ対策。"""
+        end = time.time() + deadline
+        prev, self.ser.timeout = self.ser.timeout, 0.15
+        quiet = 0.0
+        try:
+            while time.time() < end:
+                if self.ser.read(256):
+                    quiet = 0.0
+                else:
+                    quiet += 0.15
+                    if quiet >= 0.3:        # 0.3 秒無音になったら抜ける
+                        break
+        finally:
+            self.ser.timeout = prev
+        self.ser.reset_input_buffer()
+
     def command(self, line, _retry=True):
-        """1 行送って 1 行受け取る。EV 行 (非同期通知) は読み飛ばす。"""
+        """1 行送って 1 行受け取る。応答以外の行 (EV 通知・ブートログ) は捨てる。"""
         with self._lock:
             try:
                 self.ser.write((line + "\n").encode())
                 self.ser.flush()
-                for _ in range(5):
+                for _ in range(MAX_REPLY_LINES):
                     resp = self.ser.readline().decode(errors="replace").strip()
                     if not resp:
                         raise IOError("no response from %s" % self.port)
                     if resp.startswith("EV "):
                         log.warning("pwmfan event: %s", resp[3:])
                         continue
+                    if not resp.startswith(REPLY_PREFIXES):
+                        # "ESP-ROM:..." 等。応答と取り違えると set_duty が
+                        # 誤って失敗扱いになり、再オープン→再リセットを繰り返す。
+                        log.debug("pwmfan noise: %r", resp)
+                        continue
                     return resp
-                raise IOError("only events, no reply")
+                raise IOError("no reply within %d lines" % MAX_REPLY_LINES)
             except Exception:
                 if not _retry:
                     raise

@@ -26,6 +26,11 @@ class MockFirmware:
         self.got_first = False
         self.last_cmd = time.time()
         self.events = []
+        self.raw_queue = []         # テスト用: 応答前に割り込ませる生バイト
+
+    def emit_raw(self, data):
+        """ROM ブートログのような「応答ではない行」を流し込む (テスト用)。"""
+        self.raw_queue.append(data)
 
     @property
     def src(self):
@@ -79,6 +84,8 @@ class MockFirmware:
 def serve(fw, master_fd, stop):
     buf = b""
     while not stop.is_set():
+        while fw.raw_queue:
+            os.write(master_fd, fw.raw_queue.pop(0))
         ev = fw.tick()
         if ev:
             os.write(master_fd, (ev + "\n").encode())
