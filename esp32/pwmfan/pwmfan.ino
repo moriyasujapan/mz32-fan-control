@@ -1,5 +1,5 @@
 /*
- * pwmfan — M5Stamp-C3 4PIN ファン PWM コントローラ
+ * pwmfan — 4PIN ファン PWM コントローラ (M5Stamp-C3 / XIAO ESP32C6 両対応)
  *
  * ホスト (pwmd.py) から USB シリアルで duty を受け取り、25kHz の PWM を出す。
  * ホストが落ちた・固まった場合は 30 秒で 100% 全開へフェイルセーフする。
@@ -21,15 +21,36 @@
  *   V          ビルド情報                -> "VER pwmfan <version> pin=<n> freq=<hz>"
  * 未知のコマンドは "ERR unknown" を返す。
  *
- * ボード設定: ESP32C3 Dev Module / USB CDC On Boot: Disabled
- *   (Stamp-C3 の USB-C は CH9102 → UART0。Enabled だと Serial が未配線の native USB に向く)
+ * ボード設定:
+ *   M5Stamp-C3     : "ESP32C3 Dev Module" / USB CDC On Boot: **Disabled**
+ *                    (USB-C は CH9102 → UART0。Enabled だと Serial が未配線の
+ *                     native USB に向いて何も出てこない)
+ *   XIAO ESP32C6   : "XIAO_ESP32C6" / USB CDC On Boot: **Enabled**
+ *                    (native USB Serial/JTAG。arduino-esp32 **3.0.0 以降が必須**)
  * arduino-esp32 2.x / 3.x どちらでもビルド可。
  */
 
 #include <Arduino.h>
 
-static const char    *VERSION     = "1.2.0";
-static const uint8_t  PWM_PIN     = 5;       // G5 -> FET ゲート
+static const char    *VERSION     = "1.3.0";
+
+// ---- ボード差分 -------------------------------------------------------
+// PWM ピンは「ヘッダに出ていて、かつストラッピング/JTAG と衝突しない」ものを選ぶ。
+//   ESP32-C3 のストラッピング: GPIO2, 8, 9        -> G5 は安全
+//   ESP32-C6 のストラッピング: GPIO4, 5, 8, 9, 15 -> **GPIO5 は使用不可**
+//     XIAO C6 のヘッダは D0..D10 = GPIO 0,1,2,21,22,23,16,17,19,20,18 で、
+//     いずれもストラッピングではない。D1(GPIO1) を使い、D0(GPIO0) は
+//     将来のサーミスタ用 ADC に空けておく。
+#if defined(ARDUINO_XIAO_ESP32C6)
+  static const char  *BOARD_NAME = "xiao-c6";
+  static const uint8_t PWM_PIN   = 1;        // D1 / GPIO1 -> FET ゲート
+  #define STATUS_LED_MONO 1                  // GPIO15 の単色LED (LOW で点灯)
+  static const uint8_t LED_PIN   = 15;
+#else
+  static const char  *BOARD_NAME = "stamp-c3";
+  static const uint8_t PWM_PIN   = 5;        // G5 -> FET ゲート
+  static const uint8_t LED_PIN   = 2;        // オンボード SK6812
+#endif
 static const uint8_t  PWM_CHANNEL = 0;       // 2.x のみ使用
 static const uint32_t PWM_FREQ    = 25000;   // Intel 4-wire 仕様
 static const uint8_t  PWM_BITS    = 10;      // 0..1023
@@ -43,8 +64,7 @@ static const uint16_t PWM_MAX     = (1 << PWM_BITS) - 1;
 // 誤るとカーブが冷却と逆に働くので、変更後は必ず D 100 で全開になることを確認する。
 static const bool     PWM_INVERT  = true;
 
-static const uint8_t  LED_PIN     = 2;       // オンボード SK6812
-static const uint8_t  LED_LEVEL   = 40;      // 明るさ (0-255)
+static const uint8_t  LED_LEVEL   = 40;      // 明るさ (0-255, SK6812 用)
 
 // ホストから 30 秒コマンドが来なければ全開に倒す
 static const uint32_t FAILSAFE_MS = 30000;
@@ -63,7 +83,14 @@ static String   g_line;
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
 static void pwmInit()               { ledcAttach(PWM_PIN, PWM_FREQ, PWM_BITS); }
 static void pwmWrite(uint32_t v)    { ledcWrite(PWM_PIN, v); }
+#if defined(STATUS_LED_MONO)
+static void ledWrite(uint8_t r, uint8_t g, uint8_t b) {
+  // 単色LED: ホスト制御中だけ消灯、boot/failsafe (=全開) で点灯させる
+  digitalWrite(LED_PIN, (g > 0) ? HIGH : LOW);   // XIAO の LED は LOW で点灯
+}
+#else
 static void ledWrite(uint8_t r, uint8_t g, uint8_t b) { rgbLedWrite(LED_PIN, r, g, b); }
+#endif
 #else
 static void pwmInit() {
   ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_BITS);
@@ -125,8 +152,9 @@ static void handleLine(const String &raw) {
       Serial.printf("PONG pwmfan %s\n", VERSION);
       break;
     case 'V':
-      Serial.printf("VER pwmfan %s pin=%u freq=%lu invert=%d\n", VERSION,
-                    PWM_PIN, (unsigned long)PWM_FREQ, PWM_INVERT ? 1 : 0);
+      Serial.printf("VER pwmfan %s board=%s pin=%u freq=%lu invert=%d\n",
+                    VERSION, BOARD_NAME, PWM_PIN, (unsigned long)PWM_FREQ,
+                    PWM_INVERT ? 1 : 0);
       break;
     default:
       Serial.println("ERR unknown");
@@ -136,6 +164,9 @@ static void handleLine(const String &raw) {
 
 void setup() {
   Serial.begin(115200);
+#if defined(STATUS_LED_MONO)
+  pinMode(LED_PIN, OUTPUT);
+#endif
   pwmInit();
   applyDuty(BOOT_DUTY);            // ホストが喋るまでは全開 (LED 青)
   g_lastCmdMs = millis();
