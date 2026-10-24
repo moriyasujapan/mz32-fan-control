@@ -12,8 +12,11 @@ BMC に依存しない M5Stamp-C3 (ESP32-C3) 版への移行設計をまとめ�
 
 | ディレクトリ | 内容 |
 |---|---|
-| `pwmd.py` ほか | **現行版**: BMC Web API Fan Profile を叩くデーモン (稼働中・負荷試験済み) |
-| [`esp32/`](esp32/) | **移行先**: M5Stamp-C3 から直接 PWM を出す構成のファーム・配線図・実装図・部品表・ケース STL |
+| `pwmd.py` ほか | デーモン本体。出力先を `backend = serial` (**現行**, 2026-10-24〜) と `bmc` から選ぶ |
+| [`esp32/`](esp32/) | **現行の出力段**: XIAO ESP32C6 (または M5Stamp-C3) から 2N7000 経由で直接 PWM を出す構成のファーム・配線図・実装図・部品表・ケース STL |
+
+BMC Web API 版も引き続き動く (`backend = bmc`)。ESP 版の負荷試験は
+[ESP serial 版の負荷試験](#esp-serial-版の負荷試験-2026-10-24) を参照。
 
 ### 動作環境 (検証済み)
 
@@ -189,10 +192,26 @@ Invalid command。DCMI/Redfish PATCHも不可)。ipmitool は監視専用
 backend = serial
 
 [serial]
-port = /dev/ttyACM0
+port = /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_<MAC>-if00
 baud = 115200
 timeout = 2.0
 ```
+
+切り替え時の注意 (2026-10-24 の実機切り替えで踏んだもの):
+
+- **SYS_FAN4 はハブから抜く。** 繋いだままだと BMC のプッシュプル出力が勝ち、
+  ESP の指示はファンに届かない (FET が ON のときは出力同士が競合する)。
+- **デバイスは `root:dialout 0660`。** `pwmdaemon.service` の
+  `SupplementaryGroups=dialout` でサービスだけに権限を付ける。手で付けた ACL は
+  USB の抜き差しで消える。
+- **ポートは by-id 名で指定する。** `ttyACM0` は他の CDC 機器があると番号がずれる。
+- **XIAO ESP32C6 は `CDCOnBoot=cdc` を明示してビルドする。** arduino-esp32 3.3.12
+  の `CDCOnBoot=default` は Disabled の意味で、焼くと ROM ログの後は USB が無言に
+  なり、ホストの書き込みも詰まる:
+  `arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32C6:CDCOnBoot=cdc esp32/pwmfan`
+- **極性と failsafe は耳で確かめる。** `D 20` で静か、`D 100` で全開、デーモン停止から
+  30 秒で全開。XIAO の橙 LED (GPIO15) は boot / failsafe で点灯、ホスト制御中は消灯
+  (隣の赤 LED は充電表示でファームとは無関係)。
 
 ファームと回路は [`esp32/`](esp32/)。PWM は **G5 → 2N7000 (ゲート 100kΩ
 プルダウン) → ファン PWM 線 (青)** で、FET でオープンドレイン化するため
@@ -205,6 +224,25 @@ timeout = 2.0
 ```
 python3 esp32/test_serial_backend.py     # 13項目すべて PASS を確認済み
 ```
+
+## ESP serial 版の負荷試験 (2026-10-24)
+
+![ESP serial 版の負荷試験](report-serial.png)
+
+XIAO ESP32C6 + 2N7000 → BFB1012EH、`backend = serial`。`flash-next-w4a16`
+(TP=2, 両170HX) に 16 並列で約 5 分 (189req / 114,485tok / 388 tok/s / エラー0)。
+温度は 5 秒サンプル、duty は pwmd のログ (`via serial`) から。
+
+| フェーズ | 温度MAX | 2枚合計電力 | 適用duty |
+|---|---|---|---|
+| アイドル | 56〜60℃ | 約90W | 40% |
+| 立ち上がり | 57→66℃ | 220〜370W | 40→51→61% |
+| 全負荷平衡 (util 99%) | **65〜69℃** | peak **391W** | **61%** |
+| 冷却 | 69→54℃ | 約90W | 負荷終了 72 秒後に 51% (下降は律速) |
+
+BMC 版 (上の 2026-10-20) の平衡 69〜70℃ / 63% / 388W と同等以上に冷えている。
+オーバーシュート・ハンチングなし。作図は
+`python3 plot_report.py <log> report-serial.png "XIAO ESP32C6 serial"`。
 
 ## 使い方
 
