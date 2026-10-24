@@ -13,6 +13,10 @@ Type=notify
 NotifyAccess=main
 WatchdogSec=60
 User=build
+# backend = serial のとき ESP の /dev/ttyACM* (root:dialout 0660) を開くため。
+# ユーザーを dialout に入れなくても、このサービスのプロセスだけに付与される。
+# 手で付けた ACL は USB の抜き差しで消えるが、これは消えない。
+SupplementaryGroups=dialout
 ExecStart=/usr/bin/python3 /home/build/170hx/pwmdaemon/pwmd.py run --config /home/build/170hx/pwmdaemon/config.ini
 Restart=always
 RestartSec=5

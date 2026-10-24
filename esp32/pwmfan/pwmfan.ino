@@ -27,6 +27,11 @@
  *                     native USB に向いて何も出てこない)
  *   XIAO ESP32C6   : "XIAO_ESP32C6" / USB CDC On Boot: **Enabled**
  *                    (native USB Serial/JTAG。arduino-esp32 **3.0.0 以降が必須**)
+ *                    メニューの "default" は Disabled の意味 (core 3.3.12)。
+ *                    CDCOnBoot=default で焼くと ROM ログの後は USB が無言になり、
+ *                    ホストの書き込みも詰まる (2026-10-24 実機)。必ず cdc を明示:
+ *                      arduino-cli compile --fqbn \
+ *                        esp32:esp32:XIAO_ESP32C6:CDCOnBoot=cdc esp32/pwmfan
  * arduino-esp32 2.x / 3.x どちらでもビルド可。
  */
 

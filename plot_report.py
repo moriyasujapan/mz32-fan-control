@@ -17,6 +17,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else "/tmp/pwm_run2.log"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "report.png"
+# 出力経路の表記 (例: "BMC SYS_FAN4", "ESP32 serial")
+TITLE = sys.argv[3] if len(sys.argv) > 3 else "BMC SYS_FAN4"
 
 ts, g1, h1, p1, u1, g2, h2, p2, u2 = [], [], [], [], [], [], [], [], []
 for line in open(LOG):
@@ -76,14 +78,14 @@ for y, lab in ((70, "curve 70C->65%"), (60, "curve 60C->45%"),
     ax.axhline(y, color="gray", lw=.6, ls=":")
     ax.text(x[-1], y + .4, lab, fontsize=7, ha="right", color="gray")
 ax.set_ylabel("temperature [C]")
-ax.set_title("pwmd: CMP 170HX temperature -> SYS_FAN4 PWM duty (vLLM load test)")
+ax.set_title("pwmd: CMP 170HX temperature -> fan PWM duty (vLLM load test, %s)" % TITLE)
 ax.legend(fontsize=8, ncol=3, loc="lower right")
 ax.grid(alpha=.3)
 
 ax = axes[1]
 if dts:
     ax.step(dts, dvs, where="post", color="#2ca02c", lw=2.2,
-            label="applied duty (BMC fan profile)")
+            label="applied duty (pwmd log)")
     for xx, yy in zip(dts[:-1], dvs[:-1]):
         if 0 <= xx <= x[-1]:
             ax.annotate("%d%%" % yy, (xx, yy), textcoords="offset points",
